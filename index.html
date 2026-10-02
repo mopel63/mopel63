@@ -34,6 +34,13 @@
     <button id="btnExport" class="btn ghost" title="Отрендерить 18 секунд в WAV">Экспорт .wav</button>
     <button id="btnHelp" class="btn icon" title="Помощь (?)">?</button>
   </nav>
+  <nav class="palette" aria-label="Тип фигуры">
+    <button id="palRandom" class="btn ghost on" data-ptype="random" title="Случайный тип фигуры (R)">Случайно</button>
+    <button id="palOrb" class="btn ghost" data-ptype="orb" title="Орб — суб-бас (1)">Орб</button>
+    <button id="palRing" class="btn ghost" data-ptype="ring" title="Кольцо — пэд-дрон (2)">Кольцо</button>
+    <button id="palCrystal" class="btn ghost" data-ptype="crystal" title="Кристалл — колокольчик (3)">Кристалл</button>
+    <button id="palSample" class="btn ghost" data-ptype="sample" title="Сэмпл — твой звук (4)">Сэмпл</button>
+  </nav>
   <div class="counter" aria-live="polite">
     <span id="statShapes">0</span><span class="dim">&nbsp;фигур ·&nbsp;</span><span id="statVoices">0</span><span class="dim">&nbsp;голосов</span>
     <span class="limit dim" id="statLimit">/ 24</span>
@@ -42,7 +49,7 @@
 
 <!-- Нижняя подсказка -->
 <footer class="hintbar" id="hintbar">
-  <p><b>Клик</b> — создать фигуру &nbsp;•&nbsp; <b>Тяни</b> — изменить звук &nbsp;•&nbsp; <b>X</b> — панорама, <b>Y</b> — фильтр &nbsp;•&nbsp; <b>2×клик / правый клик</b> — удалить</p>
+  <p><b>Клик</b> — создать фигуру &nbsp;•&nbsp; <b>Тяни</b> — изменить звук &nbsp;•&nbsp; <b>X</b> — панорама, <b>Y</b> — фильтр &nbsp;•&nbsp; <b>2×клик / правый клик</b> — удалить &nbsp;•&nbsp; <b>1–4</b> — тип, <b>R</b> — случайно</p>
   <div class="wave" aria-hidden="true"><canvas id="wave" width="220" height="28"></canvas></div>
 </footer>
 
@@ -96,6 +103,7 @@
       <span><b>Гравитация</b> — притяжение + столкновения-перезвоны</span>
       <span><b>+ Свой звук</b> — файл станет квадратом-сэмплом</span>
       <span><b>Drag &amp; drop / ● Rec</b> — брось аудио в окно или запиши с микрофона</span>
+      <span><b>1–4 / R</b> — палитра: тип новой фигуры (4 = твой звук)</span>
     </div>
     <p class="muted small">Лимит — 24 фигуры. Свои звуки не сохраняются в ссылку и слоты. Кнопка «Экспорт .wav» рендерит 18 секунд сцены офлайн и скачивает файл.</p>
   </div>

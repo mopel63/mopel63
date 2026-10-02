@@ -46,6 +46,7 @@ let gravityOn = false;
 let soundOn = false;      // AudioContext запущен и не на паузе
 let muted = false;
 let startedOnce = false;
+let selectedType = 'random'; // палитра: какой тип спавнить по клику ('random'|orb|ring|crystal|sample)
 
 /* Свои звуки: закэшированные AudioBuffer'ы (key -> AudioBuffer + имя) */
 const sampleBuffers = new Map();
@@ -804,13 +805,37 @@ function endPointer(e) {
   dragTip.hidden = true;
   if (dragShape) { dragShape = null; }
   else if (downPos && !moved) {
-    // чистый клик в пустоте — спавн
+    // чистый клик в пустоте — спавн типа из палитры
     const { x, y } = evPos(e.changedTouches ? { touches: e.changedTouches } : e);
     startSoundIfNeeded();
-    spawnShape(x, y);
+    spawnByPalette(x, y);
   }
   downPos = null;
 }
+
+/* Палитра типов: клик спавнит выбранный тип вместо random */
+function setSelectedType(t) {
+  selectedType = t;
+  document.querySelectorAll('.palette .btn').forEach((b) =>
+    b.classList.toggle('on', b.dataset.ptype === t));
+}
+function spawnByPalette(x, y) {
+  if (selectedType === 'sample') {
+    if (sampleBuffers.size === 0) {
+      fileInput.click();
+      setSelectedType('random');
+      toast('Сначала загрузи свой звук');
+      return;
+    }
+    const keys = Array.from(sampleBuffers.keys());
+    const entry = sampleBuffers.get(keys[(Math.random() * keys.length) | 0]);
+    spawnSampleShape(x, y, entry.buffer, entry.name, rand(0.7, 1.2));
+    return;
+  }
+  spawnShape(x, y, selectedType === 'random' ? undefined : selectedType);
+}
+document.querySelectorAll('.palette .btn').forEach((b) =>
+  b.addEventListener('click', () => setSelectedType(b.dataset.ptype)));
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', () => { dragTip.hidden = true; dragShape = null; downPos = null; });
 canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
@@ -1205,6 +1230,14 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '?' || (e.key === 'h' && e.ctrlKey)) helpModal.hidden = !helpModal.hidden;
   if (e.key === 'Escape') { helpModal.hidden = true; presetPanel.hidden = true; }
   if (e.key === ' ' && e.target === document.body) { e.preventDefault(); btnSound.click(); }
+  // палитра: 1=орб, 2=кольцо, 3=кристалл, 4=сэмпл, R/0=случайно
+  if (/INPUT|TEXTAREA/.test((e.target && e.target.tagName) || '')) return;
+  const k = e.key.toLowerCase();
+  if (k === '1') setSelectedType('orb');
+  else if (k === '2') setSelectedType('ring');
+  else if (k === '3') setSelectedType('crystal');
+  else if (k === '4') setSelectedType('sample');
+  else if (k === 'r' || k === '0' || k === 'к') setSelectedType('random');
 });
 
 /* ---------- Старт ---------- */
