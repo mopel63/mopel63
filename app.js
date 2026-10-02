@@ -52,6 +52,70 @@ const sampleBuffers = new Map();
 let sampleSeq = 1;
 const MAX_FILE_MB = 20;
 
+/* ---------- Перф-инфра: качество, glow-спрайты, очередь голосов ---------- */
+/* Вид сохраняем 1в1, но рисуем дешевле: вместо shadowBlur на каждом шейпе —
+   один предрендерный radial-спрайт на тип/цвет (drawImage очень дешёвый). */
+const QUALITY = { dprCap: 1.5, glow: true, level: 0 };
+const glowSprites = new Map();
+function glowSprite(r, g, b) {
+  const key = r + ',' + g + ',' + b;
+  let cv = glowSprites.get(key);
+  if (!cv) {
+    cv = document.createElement('canvas');
+    cv.width = cv.height = 128;
+    const c = cv.getContext('2d');
+    const grad = c.createRadialGradient(64, 64, 2, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255,255,255,.85)');
+    grad.addColorStop(0.3, `rgba(${r},${g},${b},.55)`);
+    grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+    c.fillStyle = grad;
+    c.fillRect(0, 0, 128, 128);
+    glowSprites.set(key, cv);
+  }
+  return cv;
+}
+function drawGlow(x, y, R, r, g, b, alpha, flash) {
+  if (!QUALITY.glow) return;
+  const S = R * (3.2 + flash * 1.2);
+  ctx.globalAlpha = alpha * 0.8;
+  ctx.drawImage(glowSprite(r, g, b), x - S / 2, y - S / 2, S, S);
+  ctx.globalAlpha = alpha;
+}
+
+/* Волна сэмпла: даунсэмпл до 128 точек ОДИН раз при загрузке,
+   в кадре буфер больше не читаем. */
+function downsampleWave(buffer, n) {
+  try {
+    const ch = buffer.getChannelData(0);
+    const out = new Float32Array(n || 128);
+    const step = ch.length / out.length;
+    for (let i = 0; i < out.length; i++) out[i] = ch[(i * step) | 0] || 0;
+    return out;
+  } catch (e) { return null; }
+}
+
+/* Создание голосов — чанками вне rAF, чтобы старт звука не клинил кадр */
+const voiceQueue = [];
+let voiceFlushing = false;
+function queueVoices(list) {
+  list.forEach((s) => { if (!s.audio && voiceQueue.indexOf(s) < 0) voiceQueue.push(s); });
+  flushVoices();
+}
+function flushVoices() {
+  if (voiceFlushing) return;
+  voiceFlushing = true;
+  const step = () => {
+    const chunk = voiceQueue.splice(0, 4);
+    for (const s of chunk) {
+      try { if (!s.audio && AC) createVoice(s); }
+      catch (e) { console.warn('[soundscape] createVoice failed', e); }
+    }
+    if (voiceQueue.length) setTimeout(step, 30);
+    else voiceFlushing = false;
+  };
+  setTimeout(step, 0);
+}
+
 /* ---------- Аудио-ядро ---------- */
 let AC = null, master = null, analyser = null, analyserData = null, streamDest = null;
 let noiseBuffer = null;
@@ -101,6 +165,10 @@ function bellPing(destNode, freq, when, dur, vol) {
   car.start(t); mod.start(t);
   const stop = t + dur + 0.1;
   car.stop(stop); mod.stop(stop);
+  car.onended = () => {
+    try { car.disconnect(); mod.disconnect(); g.disconnect(); modG.disconnect(); }
+    catch (e) {}
+  };
 }
 
 /* Создать голос фигуры: Source -> Filter -> Panner -> voiceGain -> master */
@@ -234,40 +302,7 @@ function updatePairPads() {
           o1.start(t); o2.start(t);
           p = { osc1: o1, osc2: o2, gain: g, filter: f, pan: pn };
           pairPads.set(key, p);
-  } else if (s.type === 'sample') {
-    // сэмпл: бирюзово-розовый квадрат с волной внутри — отличим от остальных
-    const half = R;
-    const grad = ctx.createLinearGradient(s.x - half, s.y - half, s.x + half, s.y + half);
-    grad.addColorStop(0, `rgba(94,234,212,${0.85 * alpha})`);
-    grad.addColorStop(1, `rgba(244,114,182,${0.85 * alpha})`);
-    ctx.fillStyle = grad;
-    ctx.strokeStyle = `rgba(255,255,255,${0.75 * alpha})`;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(s.x - half, s.y - half, half * 2, half * 2, 6);
-    else ctx.rect(s.x - half, s.y - half, half * 2, half * 2);
-    ctx.fill(); ctx.stroke();
-    // волна: берём реальную форму буфера, если есть
-    ctx.save();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = `rgba(5,8,12,${0.8 * alpha})`;
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.rect(s.x - half, s.y - half, half * 2, half * 2);
-    ctx.clip();
-    const ch = s.sampleBuffer ? s.sampleBuffer.getChannelData(0) : null;
-    const midY = s.y, amp = half * 0.6;
-    for (let i = 0; i <= 40; i++) {
-      const px = s.x - half + (i / 40) * half * 2;
-      let v = 0;
-      if (ch) v = ch[((i / 40) * (ch.length - 1)) | 0] || 0;
-      else v = Math.sin(i * 0.7 + performance.now() * 0.003) * 0.4;
-      const py = midY + clamp(v, -1, 1) * amp;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
-    ctx.restore();
-  } else {
+        } else {
           const t = AC.currentTime;
           p.gain.gain.setTargetAtTime(0.028 + closeness * 0.05, t, 0.4);
           p.filter.frequency.setTargetAtTime(yToCutoff(midY, H), t, 0.3);
@@ -446,7 +481,8 @@ function spawnSampleShape(x, y, buffer, name, rate) {
     sampleBuffer: buffer,
     sampleKey: key,
     sampleName: name || 'запись',
-    sampleRate: rate || 1.0
+    sampleRate: rate || 1.0,
+    waveCache: downsampleWave(buffer, 128)
   };
   shapes.push(s);
   if (AC && soundOn) createVoice(s);
@@ -473,7 +509,7 @@ function clearAll() {
 
 /* ---------- Canvas: размер, фон ---------- */
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  DPR = Math.min(window.devicePixelRatio || 1, QUALITY.dprCap);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
@@ -486,6 +522,7 @@ resize();
 
 /* ---------- Физика + рендер ---------- */
 let lastT = performance.now();
+let lastPairT = 0, waveTick = 0, slowStreak = 0;
 
 function physics(dt) {
   const damp = 0.995;
@@ -562,8 +599,8 @@ function drawShape(s) {
 
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.shadowBlur = 26 + flash * 40;
-  ctx.shadowColor = `rgba(${r},${g},${b},.9)`;
+  // свечение — предрендерный glow-спрайт вместо shadowBlur (тот же вид, дешевле)
+  drawGlow(s.x, s.y, R, r, g, b, alpha, flash);
 
   if (s.type === 'orb') {
     const grad = ctx.createRadialGradient(s.x - R * 0.3, s.y - R * 0.3, 1, s.x, s.y, R);
@@ -572,17 +609,45 @@ function drawShape(s) {
     grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
     ctx.fillStyle = grad;
     ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, TAU); ctx.fill();
-    ctx.shadowBlur = 0;
     ctx.fillStyle = 'rgba(255,255,255,.9)';
     ctx.beginPath(); ctx.arc(s.x - R * 0.28, s.y - R * 0.3, R * 0.14, 0, TAU); ctx.fill();
   } else if (s.type === 'ring') {
     ctx.strokeStyle = `rgba(${r},${g},${b},${0.9 * alpha})`;
     ctx.lineWidth = 2 + flash * 2;
     ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, TAU); ctx.stroke();
-    ctx.shadowBlur = 8;
     ctx.strokeStyle = `rgba(255,255,255,${0.35 * alpha})`;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(s.x, s.y, R * 0.62, s.rot, s.rot + TAU * 0.8); ctx.stroke();
+  } else if (s.type === 'sample') {
+    // сэмпл: бирюзово-розовый квадрат с волной (волна из кэша 128 точек)
+    const half = R;
+    const grad = ctx.createLinearGradient(s.x - half, s.y - half, s.x + half, s.y + half);
+    grad.addColorStop(0, `rgba(94,234,212,${0.85 * alpha})`);
+    grad.addColorStop(1, `rgba(244,114,182,${0.85 * alpha})`);
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = `rgba(255,255,255,${0.75 * alpha})`;
+    ctx.lineWidth = 1.5 + flash;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(s.x - half, s.y - half, half * 2, half * 2, 6);
+    else ctx.rect(s.x - half, s.y - half, half * 2, half * 2);
+    ctx.fill(); ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(s.x - half, s.y - half, half * 2, half * 2);
+    ctx.clip();
+    ctx.strokeStyle = `rgba(5,8,12,${0.8 * alpha})`;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    const wc = s.waveCache;
+    const midY = s.y, amp = half * 0.6;
+    for (let i = 0; i <= 40; i++) {
+      const px = s.x - half + (i / 40) * half * 2;
+      const v = wc ? wc[((i / 40) * (wc.length - 1)) | 0] : Math.sin(i * 0.7 + performance.now() * 0.003) * 0.4;
+      const py = midY + clamp(v, -1, 1) * amp;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
   } else {
     // кристалл-полигон
     ctx.translate(s.x, s.y); ctx.rotate(s.rot);
@@ -605,8 +670,23 @@ function drawShape(s) {
 }
 
 function frame(now) {
+  // следующий кадр планируем СРАЗУ: исключение в tick больше не убьёт цикл
+  requestAnimationFrame(frame);
   const dt = clamp(now - lastT, 8, 50);
   lastT = now;
+
+  // FPS-guard: dt>40мс подряд — ступенчато glow off, затем DPR->1, пишем в консоль
+  if (dt > 40) slowStreak++; else slowStreak = Math.max(0, slowStreak - 2);
+  if (slowStreak >= 8) {
+    slowStreak = 0;
+    if (QUALITY.level === 0) {
+      QUALITY.level = 1; QUALITY.glow = false;
+      console.warn('[soundscape] FPS-guard: glow-спрайты выключены (dt>40мс x8)');
+    } else if (QUALITY.level === 1) {
+      QUALITY.level = 2; QUALITY.dprCap = 1; resize();
+      console.warn('[soundscape] FPS-guard: DPR снижен до 1');
+    }
+  }
 
   physics(dt);
 
@@ -614,7 +694,7 @@ function frame(now) {
   ctx.fillStyle = REDUCED ? 'rgba(5,6,8,0.32)' : 'rgba(5,6,8,0.16)';
   ctx.fillRect(0, 0, W, H);
 
-  // связи-линии
+  // связи-линии (без shadowBlur — мягкость даёт альфа; вид тот же)
   for (let i = 0; i < shapes.length; i++) {
     for (let j = i + 1; j < shapes.length; j++) {
       const a = shapes[i], b = shapes[j];
@@ -625,8 +705,6 @@ function frame(now) {
         ctx.globalAlpha = t * 0.5;
         ctx.strokeStyle = `rgba(150,180,255,${0.1 + t * 0.5})`;
         ctx.lineWidth = 1;
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = 'rgba(140,170,255,.7)';
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
         ctx.restore();
       }
@@ -634,20 +712,25 @@ function frame(now) {
   }
   shapes.forEach(drawShape);
 
-  // перезвоны кристаллов + обновление парных пэдов
+  // перезвоны кристаллов + парные пэды (троттлинг по времени, не по кадрам)
   if (AC && soundOn) {
     const t = AC.currentTime;
     for (const s of shapes) {
       if (s.type === 'crystal' && s.audio && t >= s.nextChime) {
-        bellPing(s.audio.filter, pickPenta() * 2, t + 0.02, rand(1.5, 2.5), 0.2);
+        try { bellPing(s.audio.filter, pickPenta() * 2, t + 0.02, rand(1.5, 2.5), 0.2); }
+        catch (e) { console.warn('[soundscape] chime failed', e); }
         s.nextChime = t + rand(3, 7);
       }
     }
-    if ((frame.n = (frame.n || 0) + 1) % 20 === 0) updatePairPads();
+    if (now - lastPairT > 300) {
+      lastPairT = now;
+      try { updatePairPads(); }
+      catch (e) { console.warn('[soundscape] pair pads failed (цикл жив)', e); }
+    }
   }
 
-  drawWave();
-  requestAnimationFrame(frame);
+  // волна-анализатор ~15fps вместо каждого кадра
+  if ((waveTick = (waveTick + 1) % 4) === 0) drawWave();
 }
 
 function drawWave() {
@@ -749,7 +832,7 @@ function startSoundIfNeeded() {
   if (AC.state === 'suspended') AC.resume().catch(() => {});
   if (!soundOn) {
     soundOn = true; startedOnce = true;
-    shapes.forEach((s) => { if (!s.audio) createVoice(s); });
+    queueVoices(shapes.slice());
     btnSound.innerHTML = '⏸&nbsp;Пауза';
     btnSound.classList.add('on');
     toast('Звук включён — кликай и тяни фигуры');
@@ -765,7 +848,7 @@ btnSound.addEventListener('click', () => {
   } else {
     soundOn = true;
     AC.resume().catch(() => {});
-    shapes.forEach((s) => { if (!s.audio) createVoice(s); });
+    queueVoices(shapes.slice());
     btnSound.innerHTML = '⏸&nbsp;Пауза';
     btnSound.classList.add('on');
   }
@@ -828,7 +911,7 @@ function applyScene(arr) {
       flash: 0, nextChime: 0, born: performance.now(), audio: null
     };
     shapes.push(s);
-    if (AC && soundOn) createVoice(s);
+    if (AC && soundOn) queueVoices([s]);
   });
   updateCounter();
 }
