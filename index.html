@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Soundscape Sculptor — трёхмерный процедурный эмбиент-генератор</title>
+<meta name="description" content="Медитативный процедурный эмбиент-генератор. Кликай — создавай фигуры, тяни — меняй звук. Всё генерируется в браузере.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<!-- Верхний бар -->
+<header class="topbar" id="topbar">
+  <div class="brand">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <div class="brand-text">
+      <strong>Soundscape Sculptor</strong>
+      <span>процедурный эмбиент-генератор</span>
+    </div>
+  </div>
+  <nav class="controls" aria-label="Управление">
+    <button id="btnSound" class="btn primary" title="Запустить / приостановить звук">▶&nbsp;Звук</button>
+    <button id="btnMute" class="btn ghost" title="Заглушить мастер">Mute</button>
+    <button id="btnGravity" class="btn ghost" aria-pressed="false" title="Включить притяжение фигур">Гравитация</button>
+    <button id="btnSample" class="btn ghost" title="Добавить свой аудиофайл — станет фигурой-сэмплом">+ Свой звук</button>
+    <button id="btnRec" class="btn ghost" title="Записать звук с микрофона">● Rec</button>
+    <button id="btnClear" class="btn ghost" title="Убрать все фигуры">Очистить</button>
+    <button id="btnSave" class="btn ghost" title="Пресеты, ссылка, слоты">Сохранить пресет</button>
+    <button id="btnExport" class="btn ghost" title="Отрендерить 18 секунд в WAV">Экспорт .wav</button>
+    <button id="btnHelp" class="btn icon" title="Помощь (?)">?</button>
+  </nav>
+  <div class="counter" aria-live="polite">
+    <span id="statShapes">0</span><span class="dim">&nbsp;фигур ·&nbsp;</span><span id="statVoices">0</span><span class="dim">&nbsp;голосов</span>
+    <span class="limit dim" id="statLimit">/ 24</span>
+  </div>
+</header>
+
+<!-- Нижняя подсказка -->
+<footer class="hintbar" id="hintbar">
+  <p><b>Клик</b> — создать фигуру &nbsp;•&nbsp; <b>Тяни</b> — изменить звук &nbsp;•&nbsp; <b>X</b> — панорама, <b>Y</b> — фильтр &nbsp;•&nbsp; <b>2×клик / правый клик</b> — удалить</p>
+  <div class="wave" aria-hidden="true"><canvas id="wave" width="220" height="28"></canvas></div>
+</footer>
+
+<!-- Тонкая подсказка при drag -->
+<div id="dragTip" class="drag-tip" hidden></div>
+<input type="file" id="fileInput" accept="audio/*" multiple hidden>
+<div id="dropHint" class="drop-hint" hidden>Отпусти — звук станет фигурой</div>
+
+<!-- Панель пресетов -->
+<div id="presetPanel" class="panel" hidden>
+  <h2>Пресеты сцены</h2>
+  <p class="muted">Сцена кодируется в ссылку — без сервера. Слоты хранятся в этом браузере.</p>
+  <div class="slots">
+    <div class="slot">
+      <span>Слот 1</span>
+      <div><button class="btn mini" data-save="1">Сохранить</button> <button class="btn mini ghost" data-load="1">Загрузить</button></div>
+    </div>
+    <div class="slot">
+      <span>Слот 2</span>
+      <div><button class="btn mini" data-save="2">Сохранить</button> <button class="btn mini ghost" data-load="2">Загрузить</button></div>
+    </div>
+    <div class="slot">
+      <span>Слот 3</span>
+      <div><button class="btn mini" data-save="3">Сохранить</button> <button class="btn mini ghost" data-load="3">Загрузить</button></div>
+    </div>
+  </div>
+  <div class="row">
+    <button id="btnCopyLink" class="btn primary">Скопировать ссылку</button>
+    <button id="btnClosePresets" class="btn ghost">Закрыть</button>
+  </div>
+  <p class="muted small" id="presetMsg">Автосейв включён — последнее состояние восстановится само.</p>
+</div>
+
+<!-- Модалка помощи -->
+<div id="helpModal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <button class="btn icon close" id="btnCloseHelp" title="Закрыть">×</button>
+    <h2 id="helpTitle">Как играть тишиной</h2>
+    <p class="muted">Весь звук синтезируется в браузере — ничего не скачивается. Надень наушники, кликай медленно.</p>
+    <ul class="legend">
+      <li><i class="sw orb"></i><div><b>Орб — суб-бас</b><span>Низкий гул 40–80 Гц + шум дождя. Выше на экране — выше тон и открытее фильтр.</span></div></li>
+      <li><i class="sw ring"></i><div><b>Кольцо — пэд-дрон</b><span>Два расстроенных голоса через lowpass. Медленная атака, тёплая подложка.</span></div></li>
+      <li><i class="sw crystal"></i><div><b>Кристалл — колокольчик</b><span>FM-перезвон по пентатонике каждые 3–7 сек. Стекло, искры, тишина.</span></div></li>
+      <li><i class="sw sample"></i><div><b>Сэмпл — твой звук</b><span>Квадрат с волной. Твой аудиофайл или запись с микрофона, зациклен. Тяни — меняй панораму и фильтр.</span></div></li>
+      <li><i class="sw link"></i><div><b>Линия-связь</b><span>Фигуры ближе 180 px рождают общий мягкий пэд. Чем ближе — тем громче.</span></div></li>
+    </ul>
+    <div class="keys">
+      <span><b>Клик / тап</b> — новая фигура</span>
+      <span><b>Тянуть</b> — панорама (X) + срез фильтра (Y)</span>
+      <span><b>Дабл-клик / ПКМ</b> — удалить</span>
+      <span><b>Гравитация</b> — притяжение + столкновения-перезвоны</span>
+      <span><b>+ Свой звук</b> — файл станет квадратом-сэмплом</span>
+      <span><b>Drag &amp; drop / ● Rec</b> — брось аудио в окно или запиши с микрофона</span>
+    </div>
+    <p class="muted small">Лимит — 24 фигуры. Свои звуки не сохраняются в ссылку и слоты. Кнопка «Экспорт .wav» рендерит 18 секунд сцены офлайн и скачивает файл.</p>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
